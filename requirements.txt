@@ -3,3 +3,4 @@ requests
 gunicorn
 openai
 python-dotenv
+python-telegram-bot==13.15
