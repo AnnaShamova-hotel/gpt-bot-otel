@@ -1,47 +1,47 @@
 import os
 import logging
-import asyncio
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes
-from telegram.ext import filters
+from flask import Flask, request
 import openai
-from dotenv import load_dotenv
+import requests
 
-load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
+assistant_id = os.getenv("ASSISTANT_ID")
+telegram_token = os.getenv("TELEGRAM_TOKEN")
+app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ASSISTANT_ID = os.getenv("OPENAI_ASSISTANT_ID")
+def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
+    data = {"chat_id": chat_id, "text": text}
+    requests.post(url, json=data)
 
-openai.api_key = OPENAI_API_KEY
+@app.route("/", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    logging.info(f"Received data: {data}")
+    if "message" in data and "text" in data["message"]:
+        chat_id = data["message"]["chat"]["id"]
+        user_input = data["message"]["text"]
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+        try:
+            thread = openai.beta.threads.create()
+            openai.beta.threads.messages.create(
+                thread_id=thread.id,
+                role="user",
+                content=user_input
+            )
+            response = openai.beta.threads.runs.create_and_poll(
+                thread_id=thread.id,
+                assistant_id=assistant_id
+            )
+            if response.status == "completed":
+                messages = openai.beta.threads.messages.list(thread_id=thread.id)
+                reply = messages.data[0].content[0].text.value
+                send_message(chat_id, reply)
+            else:
+                send_message(chat_id, "Извини, что-то пошло не так 😢")
+        except Exception as e:
+            logging.exception("Error processing message")
+            send_message(chat_id, "Произошла ошибка 🛠️")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_message = update.message.text
-
-    response = openai.beta.threads.create_and_run(
-        assistant_id=ASSISTANT_ID,
-        thread={"messages": [{"role": "user", "content": user_message}]}
-    )
-
-    # Подождём завершения работы
-    while response.status not in ("completed", "failed"):
-        await asyncio.sleep(1)
-        response = openai.beta.threads.runs.retrieve(
-            thread_id=response.thread_id,
-            run_id=response.id
-        )
-
-    messages = openai.beta.threads.messages.list(thread_id=response.thread_id)
-    last_message = messages.data[0].content[0].text.value
-
-    await update.message.reply_text(last_message)
-
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
+    return "ok"
