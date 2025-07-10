@@ -11,8 +11,11 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-with open("instructions.txt", "r", encoding="utf-8") as f:
-    SYSTEM_PROMPT = f.read()
+SYSTEM_PROMPT = """
+🧭 Твоя роль: стратег, который не продаёт, а формирует влюблённость
+Ты — стратег и бренд-директор, который умеет превращать отель в место силы...
+(сюда вставлен весь текст из предыдущего сообщения)
+"""
 
 def ask_gpt(user_text):
     headers = {
@@ -20,7 +23,7 @@ def ask_gpt(user_text):
         "Content-Type": "application/json"
     }
     json_data = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_text}
