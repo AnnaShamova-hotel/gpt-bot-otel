@@ -1,72 +1,76 @@
-import requests
-import openai
-from flask import Flask, request
 import os
-from dotenv import load_dotenv
+import logging
+import asyncio
+import telegram
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+import openai
 
-load_dotenv()
+# Настройка логгирования
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-app = Flask(__name__)
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
-assistant_id = "asst_fyQfTwvARI3QurpvUTTcPfnW"
+# Получение ключей из переменных окружения
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ASSISTANT_ID = "asst_fyQfTwvARI3QurpvUTTcPfnW"  # ← Твой кастомный ассистент
 
-# Храним thread_id для каждого пользователя
+openai.api_key = OPENAI_API_KEY
+
+# Создание потока общения для каждого пользователя
 user_threads = {}
 
-def send_message(chat_id, text):
-    url = f"{TELEGRAM_API_URL}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    requests.post(url, json=payload)
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Привет! Я здесь, чтобы помочь тебе переосмыслить и усилить твой отель. Расскажи, с чего начнём?")
 
-def ask_assistant(chat_id, user_text):
-    # Получаем или создаем thread_id
-    if chat_id not in user_threads:
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.message.from_user.id)
+    user_message = update.message.text
+
+    if user_id not in user_threads:
         thread = openai.beta.threads.create()
-        user_threads[chat_id] = thread.id
-    thread_id = user_threads[chat_id]
+        user_threads[user_id] = thread.id
+    else:
+        thread = openai.beta.threads.retrieve(user_threads[user_id])
 
-    # Отправляем сообщение пользователю
+    # Добавить сообщение пользователя в поток
     openai.beta.threads.messages.create(
-        thread_id=thread_id,
+        thread_id=thread.id,
         role="user",
-        content=user_text
+        content=user_message
     )
 
-    # Запускаем ассистента
+    # Запустить ассистента на потоке
     run = openai.beta.threads.runs.create(
-        thread_id=thread_id,
-        assistant_id=assistant_id
+        thread_id=thread.id,
+        assistant_id=ASSISTANT_ID,
     )
 
-    # Ждём завершения
+    # Ожидание завершения run
     while True:
-        run_status = openai.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+        run_status = openai.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
         if run_status.status == "completed":
             break
+        elif run_status.status == "failed":
+            await update.message.reply_text("Произошла ошибка при общении с GPT. Попробуй ещё раз позже.")
+            return
+        await asyncio.sleep(1)
 
-    # Получаем ответ
-    messages = openai.beta.threads.messages.list(thread_id=thread_id)
-    for msg in reversed(messages.data):
-        if msg.role == "assistant":
-            return msg.content[0].text.value
+    # Получить ответ
+    messages = openai.beta.threads.messages.list(thread_id=thread.id)
+    assistant_response = next((msg.content[0].text.value for msg in reversed(messages.data) if msg.role == "assistant"), None)
 
-    return "Извини, я не смог ответить. Попробуй ещё раз."
+    if assistant_response:
+        await update.message.reply_text(assistant_response)
+    else:
+        await update.message.reply_text("Что-то пошло не так. Попробуй ещё раз.")
 
-@app.route("/", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    if "message" in data and "text" in data["message"]:
-        chat_id = str(data["message"]["chat"]["id"])
-        user_text = data["message"]["text"]
+if __name__ == '__main__':
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-        if user_text == "/start":
-            greeting = "Привет. Я помогу тебе увидеть, чем твоё место — не как все. Расскажи, где находится отель?"
-            send_message(chat_id, greeting)
-        else:
-            reply = ask_assistant(chat_id, user_text)
-            send_message(chat_id, reply)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    return {"ok": True}
+    app.run_polling()
