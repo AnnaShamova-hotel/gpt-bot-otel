@@ -45,4 +45,4 @@ def webhook():
         except Exception:
             reply = "Произошла ошибка при обращении к GPT. Попробуй ещё раз позже."
         send_message(chat_id, reply)
-    return {"ok": True"}
+    return {"ok": True}
